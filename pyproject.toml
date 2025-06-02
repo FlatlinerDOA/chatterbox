@@ -20,7 +20,8 @@ dependencies = [
     "resemble-perth==1.0.1",
     "omegaconf==2.3.0",
     "conformer==0.3.2",
-    "safetensors==0.5.3"
+    "safetensors==0.5.3",
+    "ffmpeg-python==0.2.0"
 ]
 
 [project.urls]
