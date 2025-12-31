@@ -23,6 +23,7 @@ var env = app.Services.GetRequiredService<IPythonEnvironment>();
 
 var rootCommand = new RootCommand("Reads out websites and text files");
 rootCommand.Add(new ReadCommand(env));
+rootCommand.Add(new NarrateCommand(env));
 rootCommand.Add(new DumpCommand());
 rootCommand.Add(new ConcatOutputCommand(env));
 await rootCommand.InvokeAsync(args);

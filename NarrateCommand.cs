@@ -1,8 +1,9 @@
+using System.Collections.Concurrent;
 using System.CommandLine;
 using CSnakes.Runtime;
 
 
-public class ReadCommand : Command
+public class NarrateCommand : Command
 {
     private readonly Argument<string> sourceOption = new("--source", "Web address, local file or literal plain text to read from.");
 
@@ -12,7 +13,9 @@ public class ReadCommand : Command
 
     private readonly Option<FileInfo> outputOption = new("--output", () => new FileInfo(Path.Combine(Environment.CurrentDirectory, "output.mp3")), "Output file to write to.");
 
-    private readonly Option<FileInfo> voiceOption = new("--voice", () => new FileInfo(Path.Combine(Environment.CurrentDirectory, "karen.mp3")), "Audio recording of voice to emulate when reading.");
+    private readonly Option<FileInfo[]> voicesOption = new("--voice", () => [new FileInfo(Path.Combine(Environment.CurrentDirectory, "karen.mp3"))], "Audio recording of voice to emulate when reading.");
+
+    private readonly Option<string> markerOption = new("--marker", () => ":", "The name to text separator (defaults to : e.g. Narrator: Enter two sentinals.).");
 
     private readonly Option<double> exagerationOption = new("--exaggeration", () => 0.6, "Exagerration factor 0.5 neutral, 0.8 very exaggerated / dramatic speech.");
 
@@ -21,21 +24,22 @@ public class ReadCommand : Command
     private readonly Option<double> cfgOption = new("--cfg", () => 0.5, "CFG [0.0-1.0] is the context-free guidance score, should be roughly inverse to exaggeration, lowering this allows you to compensate when exaggeration speeds up speeach.");
     private readonly IPythonEnvironment environment;
 
-    public ReadCommand(IPythonEnvironment environment) : base("read", "Reads out a web page or a text file")
+    public NarrateCommand(IPythonEnvironment environment) : base("narrate", "Narrates a screen play from a web page or a text file.")
     {
         this.environment = environment;
         this.Add(sourceOption);
         this.Add(skipToOption);
-        this.Add(untilOption);
+        //this.Add(untilOption);
         this.Add(outputOption);
-        this.Add(voiceOption);
+        this.Add(voicesOption);
         this.Add(exagerationOption);
         this.Add(temperaturenOption);
         this.Add(cfgOption);
-        this.SetHandler(this.ReadContentAsync, this.sourceOption, this.skipToOption, this.untilOption, this.outputOption, this.voiceOption, this.exagerationOption, this.temperaturenOption, this.cfgOption);
+        this.Add(markerOption);
+        this.SetHandler(this.ReadContentAsync, this.sourceOption, this.skipToOption, this.outputOption, this.voicesOption, this.exagerationOption, this.temperaturenOption, this.cfgOption, this.markerOption);
     }
 
-    public async Task ReadContentAsync(string source, string? skipTo, string? until, FileInfo output, FileInfo conditionalVoice, double exaggeration, double temperature, double cfg)
+    public async Task ReadContentAsync(string source, string? skipTo,  FileInfo output, FileInfo[] conditionalVoices, double exaggeration, double temperature, double cfg, string marker)
     {
         var module = this.environment.GenerateWithVoice();
         var seed = 0;
@@ -43,24 +47,39 @@ public class ReadCommand : Command
         string content = await readingMode.ReadFromSourceAsync(source);
         var filesProduced = new List<string>();
 
-        foreach (var (index, paragraph) in content.Sentences().Paragraphs().SkipWhile(s => !string.IsNullOrWhiteSpace(skipTo) && !s.Contains(skipTo, StringComparison.Ordinal)).TakeWhile(s => string.IsNullOrWhiteSpace(until) || !s.Contains(until, StringComparison.Ordinal)).Index())
+        string name = "Narrator";
+        ConcurrentDictionary<string, FileInfo> nameToVoice = new();
+        // .TakeWhile(s => string.IsNullOrWhiteSpace(until) || !s.Contains(until, StringComparison.Ordinal))
+        foreach (var (index, sentence) in content.Sentences().SkipWhile(s => !string.IsNullOrWhiteSpace(skipTo) && !s.Contains(skipTo, StringComparison.Ordinal)).Index())
         {
-            var outputFileName =  $"{Path.GetFileNameWithoutExtension(output.Name)}-{index:000000}.wav";
+            var outputFileName = $"{Path.GetFileNameWithoutExtension(output.Name)}-{index:000000}.wav";
             var outputPath = Path.Combine(output.Directory!.FullName, outputFileName);
-            Console.WriteLine($"{outputFileName}: {paragraph}");
+            var startIndex = !sentence.StartsWith(" ") ? sentence.IndexOf(marker) : -1;
+            (name, var phrase) = startIndex != -1 ? (sentence[..startIndex].Trim(), sentence[(startIndex + 1)..].Trim()) : (name, sentence.Trim());
+            if (string.IsNullOrWhiteSpace(phrase))
+            {
+                throw new InvalidOperationException($"No phrase to speak for {name} \"{sentence}\"");
+            }
+            Console.WriteLine($"{outputFileName}: {name}: {phrase}");
+            var voice = nameToVoice.GetOrAdd(name, conditionalVoices.Except(nameToVoice.Values).FirstOrDefault());
+            if (voice is null)
+            {
+                throw new InvalidOperationException($"Sorry not enough voices for {name}");
+            }
 
             if (!File.Exists(outputPath))
             {
+
                 module.GenerateAndSave(
-                    paragraph,
-                    conditionalVoice.FullName,
+                    phrase,
+                    voice.FullName,
                     outputPath,
                     exaggeration,
                     temperature,
                     seed,
                     cfg);
             }
-            
+
             filesProduced.Add(outputPath);
         }
 
